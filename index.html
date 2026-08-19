@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="依照偏好找到今晚最適合的美食。" />
+    <title>今晚吃什麼？</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <main class="page-shell">
+      <header class="hero">
+        <p class="eyebrow">FOOD FINDER</p>
+        <h1>今晚吃什麼？</h1>
+        <p class="hero-copy">選好條件，讓我們替你找出此刻最適合的一餐。</p>
+      </header>
+
+      <section class="app-layout" aria-label="美食推薦器">
+        <form id="filter-form" class="filter-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="section-kicker">你的偏好</p>
+              <h2>設定條件</h2>
+            </div>
+            <button id="reset-button" class="text-button" type="button">重設</button>
+          </div>
+
+          <label class="field">
+            <span>餐廳種類</span>
+            <select id="category" name="category">
+              <option value="all">不限</option>
+              <option value="中式">中式</option>
+              <option value="西式">西式</option>
+              <option value="日式">日式</option>
+              <option value="韓式">韓式</option>
+              <option value="速食">速食</option>
+              <option value="甜點">甜點</option>
+            </select>
+          </label>
+
+          <label class="field">
+            <span>每人預算</span>
+            <select id="budget" name="budget">
+              <option value="all">不限</option>
+              <option value="150">150 元以下</option>
+              <option value="300">151–300 元</option>
+              <option value="500">301–500 元</option>
+              <option value="999999">501 元以上</option>
+            </select>
+          </label>
+
+          <label class="field">
+            <span>至少營業多久</span>
+            <select id="years-open" name="yearsOpen">
+              <option value="0">不限</option>
+              <option value="3">3 年以上</option>
+              <option value="5">5 年以上</option>
+              <option value="10">10 年以上</option>
+            </select>
+          </label>
+
+          <label class="field">
+            <span>最遠距離</span>
+            <select id="distance" name="distance">
+              <option value="99">不限</option>
+              <option value="1">1 公里內</option>
+              <option value="3">3 公里內</option>
+              <option value="5">5 公里內</option>
+            </select>
+          </label>
+
+          <label class="toggle-row" for="open-now">
+            <span>
+              <strong>只顯示營業中</strong>
+              <small>先避開撲空的店</small>
+            </span>
+            <input id="open-now" name="openNow" type="checkbox" checked />
+            <span class="toggle" aria-hidden="true"></span>
+          </label>
+
+          <button class="recommend-button" type="submit">幫我推薦</button>
+        </form>
+
+        <section class="results-panel" aria-live="polite">
+          <div class="results-heading">
+            <div>
+              <p class="section-kicker">推薦結果</p>
+              <h2 id="results-title">正在幫你挑選</h2>
+            </div>
+            <p id="result-count" class="result-count"></p>
+          </div>
+
+          <article id="top-pick" class="top-pick" hidden></article>
+          <div id="restaurant-list" class="restaurant-list"></div>
+        </section>
+      </section>
+    </main>
+
+    <template id="restaurant-card-template">
+      <article class="restaurant-card">
+        <div class="restaurant-icon" aria-hidden="true"></div>
+        <div class="restaurant-info">
+          <div class="restaurant-title-row">
+            <h3></h3>
+            <span class="status"></span>
+          </div>
+          <p class="restaurant-meta"></p>
+          <p class="restaurant-detail"></p>
+        </div>
+        <span class="match-score"></span>
+      </article>
+    </template>
+
+    <script src="restaurants.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>
