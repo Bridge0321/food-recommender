@@ -38,6 +38,15 @@
           </div>
 
           <label class="field">
+            <span>想吃什麼</span>
+            <select id="food-kind" name="foodKind">
+              <option value="meal" selected>正餐</option>
+              <option value="drink">飲料店</option>
+            </select>
+            <small>依 Google Maps 店家類型搜尋</small>
+          </label>
+
+          <label class="field">
             <span>到店時間</span>
             <output id="travel-time-value" class="range-value" for="travel-time">60 分鐘內</output>
             <input id="travel-time" name="travelTime" type="range" min="10" max="60" step="5" value="60" />

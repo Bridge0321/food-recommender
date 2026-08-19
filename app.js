@@ -66,8 +66,18 @@ function priceFromGoogle(priceLevel) {
   return prices[priceLevel] ?? 300;
 }
 
+const foodKinds = {
+  meal: { label: "正餐", types: ["restaurant", "meal_takeaway", "breakfast_restaurant", "brunch_restaurant", "fast_food_restaurant"] },
+  drink: { label: "飲料店", types: ["coffee_shop", "tea_house", "tea_store", "juice_shop"] }
+};
+
 function placeName(place) {
   return typeof place.displayName === "string" ? place.displayName : place.displayName?.text ?? "未命名餐廳";
+}
+
+function matchesFoodKind(place, foodKind) {
+  const placeTypes = [place.primaryType, ...(place.types ?? [])].filter(Boolean);
+  return placeTypes.some((type) => foodKind.types.includes(type));
 }
 
 function nearbySearchAreas(position, includeOuterRing) {
@@ -92,9 +102,11 @@ function nearbySearchAreas(position, includeOuterRing) {
 async function searchNearbyRestaurants(position, rankPreference = "popularity") {
   await loadGoogleMaps();
   const { Place, SearchNearbyRankPreference } = await google.maps.importLibrary("places");
+  const filters = getFilters();
+  const foodKind = foodKinds[filters.foodKind] ?? foodKinds.meal;
   const request = {
-    fields: ["displayName", "formattedAddress", "location", "rating", "userRatingCount", "priceLevel", "primaryType", "googleMapsURI", "currentOpeningHours", "photos", "reviews"],
-    includedTypes: ["restaurant"],
+    fields: ["displayName", "formattedAddress", "location", "rating", "userRatingCount", "priceLevel", "primaryType", "types", "googleMapsURI", "currentOpeningHours", "photos", "reviews"],
+    includedTypes: foodKind.types,
     maxResultCount: 10,
     rankPreference: rankPreference === "distance" ? SearchNearbyRankPreference.DISTANCE : SearchNearbyRankPreference.POPULARITY,
     language: "zh-TW",
@@ -106,6 +118,19 @@ async function searchNearbyRestaurants(position, rankPreference = "popularity") 
     const result = await Place.searchNearby(areaRequest);
     return result.places ?? [];
   }));
+  // 台灣手搖飲店常未被一致標記為 tea_house；以文字搜尋補足迷客夏、五桐號等品牌。
+  if (filters.foodKind === "drink") {
+    const { places: teaPlaces } = await Place.searchByText({
+      textQuery: "手搖飲",
+      fields: request.fields,
+      locationBias: { lat: position.coords.latitude, lng: position.coords.longitude },
+      maxResultCount: request.maxResultCount,
+      language: "zh-TW",
+      region: "tw"
+    });
+    // 文字搜尋可能因菜單或評論提到手搖飲而帶回餐廳、便利商店；只保留真正飲料店類型。
+    placeGroups.push((teaPlaces ?? []).filter((place) => matchesFoodKind(place, foodKind)));
+  }
   const places = [];
   // 交錯取各區結果，讓最終候選不會全由中心區最熱門的店組成。
   for (let index = 0; index < request.maxResultCount; index += 1) {
@@ -135,7 +160,7 @@ async function searchNearbyRestaurants(position, rankPreference = "popularity") 
     })).filter((review) => review.text);
     return {
       name: placeName(place),
-      category: "附近餐廳",
+      category: foodKind.label,
       foodType: place.primaryType ?? "restaurant",
       popularityRank,
       price: priceFromGoogle(place.priceLevel),
@@ -201,6 +226,7 @@ async function updateTravelTimes(position, modes = routeModes) {
 function getFilters() {
   const data = new FormData(form);
   return {
+    foodKind: data.get("foodKind"),
     budget: Number(data.get("budget")),
     travelTime: Number(data.get("travelTime")),
     travelMode: data.get("travelMode"),
@@ -544,7 +570,7 @@ form.addEventListener("change", async (event) => {
   currentBatchIndex = 0;
   excludePreviouslySeenResults = false;
   // 種類、交通工具與到店時間改變後重新搜尋，必要時可改用最近餐廳備援。
-  if (currentPosition && ["travelMode", "travelTime"].includes(event.target.name)) {
+  if (currentPosition && ["foodKind", "travelMode", "travelTime"].includes(event.target.name)) {
     currentSearchRadiusMeters = 5000;
     await refreshNearbyResults();
     return;
