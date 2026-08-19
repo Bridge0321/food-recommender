@@ -38,31 +38,24 @@
           </div>
 
           <label class="field">
-            <span>餐廳種類</span>
-            <select id="category" name="category">
-              <option value="all">不限</option>
-              <option value="中式">中式</option>
-              <option value="西式">西式</option>
-              <option value="日式">日式</option>
-              <option value="韓式">韓式</option>
-              <option value="泰式">泰式</option>
-              <option value="越式">越式</option>
-              <option value="速食">速食</option>
-              <option value="甜點">甜點</option>
-              <option value="其他">其他</option>
+            <span>到店時間</span>
+            <output id="travel-time-value" class="range-value" for="travel-time">60 分鐘內</output>
+            <input id="travel-time" name="travelTime" type="range" min="10" max="60" step="5" value="60" />
+            <small id="travel-mode-hint">以開車時間計算</small>
+          </label>
+
+          <label class="field">
+            <span>到店交通工具</span>
+            <select id="travel-mode" name="travelMode">
+              <option value="drive">開車 🚗</option>
+              <option value="bike">騎車 🛵</option>
+              <option value="walk">走路 🚶</option>
             </select>
           </label>
 
           <label class="field">
-            <span>到店時間</span>
-            <output id="travel-time-value" class="range-value" for="travel-time">不設上限</output>
-            <input id="travel-time" name="travelTime" type="range" min="10" max="60" step="5" value="60" />
-            <small>最快可到時間</small>
-          </label>
-
-          <label class="field">
             <span>每人預算</span>
-            <output id="budget-value" class="range-value" for="budget">不設上限</output>
+            <output id="budget-value" class="range-value" for="budget">1,000 元以下</output>
             <input id="budget" name="budget" type="range" min="100" max="1000" step="50" value="1000" />
             <small>每人可接受的最高金額</small>
           </label>
