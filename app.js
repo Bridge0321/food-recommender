@@ -9,6 +9,7 @@ const swipeHint = document.querySelector("#swipe-hint");
 const skipButton = document.querySelector("#skip-button");
 const starButton = document.querySelector("#star-button");
 const chooseButton = document.querySelector("#choose-button");
+const nextButton = document.querySelector("#next-button");
 const shortlistButton = document.querySelector("#shortlist-button");
 const shortlistCount = document.querySelector("#shortlist-count");
 const shortlistPanel = document.querySelector("#shortlist-panel");
@@ -36,6 +37,7 @@ const photoIndexByRestaurant = new Map();
 let usingDistanceFallback = false;
 let usingRelaxedFallback = false;
 let excludePreviouslySeenResults = false;
+let currentCandidateIndex = 0;
 
 function setTravelStatus(message, isError = false) {
   travelStatus.textContent = message;
@@ -188,6 +190,7 @@ async function searchNearbyRestaurants(position, rankPreference = "popularity") 
   );
   restaurants.splice(0, restaurants.length, ...unseenRestaurants);
   currentBatchIndex = 0;
+  currentCandidateIndex = 0;
 }
 
 const routeModes = [
@@ -400,12 +403,10 @@ function renderResults() {
   const ranked = filterAndRank();
   const candidates = availableCandidates();
   const selected = ranked.find((restaurant) => restaurant.name === selectedRestaurantName);
-  const batchStart = currentBatchIndex * batchSize;
-  const currentBatch = candidates.slice(batchStart, batchStart + batchSize);
-  // 外圈補搜時也要套用本輪剛略過的店，否則卡片會一直停在同一間。
-  const remaining = currentBatch.filter((restaurant) => !skippedRestaurantNames.has(restaurant.name));
+  document.body.classList.toggle("has-selection", Boolean(selected));
   renderShortlist();
-  resultCount.textContent = `${remaining.length}／${currentBatch.length} 間待挑選`;
+  currentCandidateIndex = Math.min(currentCandidateIndex, Math.max(candidates.length - 1, 0));
+  resultCount.textContent = candidates.length ? `${currentCandidateIndex + 1}／${candidates.length} 間` : "0 間";
 
   if (!ranked.length) {
     topPick.hidden = true;
@@ -431,8 +432,8 @@ function renderResults() {
     return;
   }
 
-  if (!remaining.length) {
-    const hasNextBatch = candidates.length > batchStart + batchSize;
+  if (!candidates.length) {
+    const hasNextBatch = false;
     const canExpandSearch = currentPosition && currentSearchRadiusMeters < expandedSearchRadiusMeters;
     topPick.hidden = true;
     swipeDeck.innerHTML = `
@@ -451,7 +452,7 @@ function renderResults() {
     return;
   }
 
-  const restaurant = remaining[0];
+  const restaurant = candidates[currentCandidateIndex];
   topPick.hidden = true;
   mapPanel.replaceChildren();
   comparisonPanel.hidden = true;
@@ -463,17 +464,19 @@ function renderResults() {
     ? `<div class="photo-carousel"><img src="${activePhoto.url}" alt="${restaurant.name} 的照片，第 ${photoIndex + 1} 張，共 ${photos.length} 張" />${renderPhotoAttribution(activePhoto.attributions)}${photos.length > 1 ? `<button class="photo-control previous-photo" type="button" data-photo-direction="previous" aria-label="上一張照片">‹</button><button class="photo-control next-photo" type="button" data-photo-direction="next" aria-label="下一張照片">›</button><div class="photo-dots" aria-label="照片 ${photoIndex + 1}／${photos.length}">${photos.map((_, index) => `<span class="${index === photoIndex ? "is-active" : ""}"></span>`).join("")}</div>` : ""}</div>`
     : `<div class="photo-fallback" aria-hidden="true">${restaurant.emoji}</div>`;
   swipeDeck.innerHTML = `
-    <article class="swipe-card" tabindex="0" aria-label="${restaurant.name}，可向左略過、向右選定">
+    <article class="swipe-card" tabindex="0" aria-label="${restaurant.name}，可向左滑回上一家、向右滑看下一家">
       <div class="restaurant-visual">${visual}<span class="status ${restaurant.isOpen ? "open" : "closed"}">${restaurant.isOpen ? "營業中" : "休息中"}</span></div>
       <div class="swipe-card-body"><p class="section-kicker">下一間候選</p><h3>${restaurant.name}</h3>
       <p class="swipe-meta">${restaurant.category} · 約 ${restaurant.price} 元／人 · ${ratingSummary(restaurant)}</p>
       <p class="swipe-reason">${travelTimeSummary(restaurant)}，符合你的設定。</p>${renderReviewTicker(restaurant)}</div>
-      <div class="swipe-labels"><span class="swipe-nope">略過</span><span class="swipe-like">選這間</span></div>
+      <div class="swipe-labels"><span class="swipe-nope">上一家</span><span class="swipe-like">下一家</span></div>
     </article>`;
   swipeActions.hidden = false;
   swipeHint.hidden = false;
+  skipButton.disabled = currentCandidateIndex === 0;
+  nextButton.disabled = currentCandidateIndex === candidates.length - 1 && (!currentPosition || currentSearchRadiusMeters >= expandedSearchRadiusMeters);
   resultsTitle.textContent = "這間怎麼樣？";
-  setupSwipeGesture(swipeDeck.querySelector(".swipe-card"), restaurant.name);
+  setupSwipeGesture(swipeDeck.querySelector(".swipe-card"));
 }
 
 function skipRestaurant(name) {
@@ -483,7 +486,23 @@ function skipRestaurant(name) {
 
 function starRestaurant(name) {
   starredRestaurantNames.add(name);
-  skippedRestaurantNames.add(name);
+  renderResults();
+}
+
+function showPreviousRestaurant() {
+  currentCandidateIndex = Math.max(0, currentCandidateIndex - 1);
+  renderResults();
+}
+
+function showNextRestaurant() {
+  const candidates = availableCandidates();
+  const currentRestaurant = candidates[currentCandidateIndex];
+  if (currentRestaurant) skippedRestaurantNames.add(currentRestaurant.name);
+  if (currentCandidateIndex >= candidates.length - 1 && currentPosition && currentSearchRadiusMeters < expandedSearchRadiusMeters) {
+    expandSearchRadius();
+    return;
+  }
+  currentCandidateIndex = Math.min(Math.max(candidates.length - 1, 0), currentCandidateIndex + 1);
   renderResults();
 }
 
@@ -507,7 +526,7 @@ async function expandSearchRadius() {
   await refreshNearbyResults();
 }
 
-function setupSwipeGesture(card, restaurantName) {
+function setupSwipeGesture(card) {
   let startX = null;
   card.addEventListener("pointerdown", (event) => {
     if (event.target.closest(".photo-carousel")) return;
@@ -525,8 +544,8 @@ function setupSwipeGesture(card, restaurantName) {
     if (startX === null) return;
     const deltaX = event.clientX - startX;
     startX = null;
-    if (deltaX < -80) skipRestaurant(restaurantName);
-    else if (deltaX > 80) chooseRestaurant(restaurantName);
+    if (deltaX < -80) showPreviousRestaurant();
+    else if (deltaX > 80) showNextRestaurant();
     else {
       card.style.transform = "";
       card.classList.remove("is-skipping", "is-choosing");
@@ -558,6 +577,7 @@ form.addEventListener("submit", (event) => {
   skippedRestaurantNames = new Set();
   starredRestaurantNames = new Set();
   currentBatchIndex = 0;
+  currentCandidateIndex = 0;
   currentSearchRadiusMeters = 5000;
   excludePreviouslySeenResults = false;
   setSettingsOpen(false);
@@ -568,6 +588,7 @@ form.addEventListener("change", async (event) => {
   selectedRestaurantName = null;
   skippedRestaurantNames = new Set();
   currentBatchIndex = 0;
+  currentCandidateIndex = 0;
   excludePreviouslySeenResults = false;
   // 種類、交通工具與到店時間改變後重新搜尋，必要時可改用最近餐廳備援。
   if (currentPosition && ["foodKind", "travelMode", "travelTime"].includes(event.target.name)) {
@@ -578,19 +599,17 @@ form.addEventListener("change", async (event) => {
   renderResults();
 });
 skipButton.addEventListener("click", () => {
-  const [restaurant] = filterAndRank().filter((item) => !skippedRestaurantNames.has(item.name));
-  if (restaurant) skipRestaurant(restaurant.name);
+  showPreviousRestaurant();
 });
 chooseButton.addEventListener("click", () => {
-  const [restaurant] = filterAndRank().filter((item) => !skippedRestaurantNames.has(item.name));
+  const restaurant = availableCandidates()[currentCandidateIndex];
   if (restaurant) chooseRestaurant(restaurant.name);
 });
+nextButton.addEventListener("click", showNextRestaurant);
 swipeDeck.addEventListener("click", (event) => {
   const photoControl = event.target.closest("[data-photo-direction]");
   if (photoControl) {
-    const [restaurant] = filterAndRank()
-      .slice(currentBatchIndex * batchSize, (currentBatchIndex + 1) * batchSize)
-      .filter((item) => !skippedRestaurantNames.has(item.name));
+    const restaurant = availableCandidates()[currentCandidateIndex];
     if (restaurant) {
       const photos = getRestaurantPhotos(restaurant);
       const currentIndex = photoIndexByRestaurant.get(restaurant.name) ?? 0;
@@ -604,7 +623,7 @@ swipeDeck.addEventListener("click", (event) => {
   if (event.target.closest('[data-action="expand-search"]')) expandSearchRadius();
 });
 starButton.addEventListener("click", () => {
-  const [restaurant] = filterAndRank().filter((item) => !skippedRestaurantNames.has(item.name));
+  const restaurant = availableCandidates()[currentCandidateIndex];
   if (restaurant) starRestaurant(restaurant.name);
 });
 shortlistButton.addEventListener("click", () => {
@@ -632,6 +651,7 @@ resetButton.addEventListener("click", () => {
   skippedRestaurantNames = new Set();
   starredRestaurantNames = new Set();
   currentBatchIndex = 0;
+  currentCandidateIndex = 0;
   currentSearchRadiusMeters = 5000;
   excludePreviouslySeenResults = false;
   syncRangeLabels();
@@ -698,6 +718,7 @@ function findNearbyFromCurrentLocation() {
       selectedRestaurantName = null;
       skippedRestaurantNames = new Set();
       starredRestaurantNames = new Set();
+      currentCandidateIndex = 0;
       excludePreviouslySeenResults = false;
       await refreshNearbyResults();
     },
