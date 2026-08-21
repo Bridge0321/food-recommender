@@ -14,12 +14,9 @@ const shortlistCount = document.querySelector("#shortlist-count");
 const shortlistPanel = document.querySelector("#shortlist-panel");
 const settingsButton = document.querySelector("#settings-button");
 const settingsBackdrop = document.querySelector("#settings-backdrop");
-const travelTimeInput = document.querySelector("#travel-time");
 const budgetInput = document.querySelector("#budget");
-const travelTimeValue = document.querySelector("#travel-time-value");
 const budgetValue = document.querySelector("#budget-value");
-const travelModeInput = document.querySelector("#travel-mode");
-const travelModeHint = document.querySelector("#travel-mode-hint");
+const searchRadiusInput = document.querySelector("#search-radius");
 const locationButton = document.querySelector("#location-button");
 const travelStatus = document.querySelector("#travel-status");
 const resultsTitle = document.querySelector("#results-title");
@@ -30,10 +27,9 @@ let skippedRestaurantNames = new Set();
 let starredRestaurantNames = new Set();
 let currentBatchIndex = 0;
 const batchSize = 10;
-let currentSearchRadiusMeters = 5000;
-const expandedSearchRadiusMeters = 8000;
+const searchRadiusStepsMeters = [5000, 8000, 12000, 18000, 27000, 40000, 50000];
+let currentSearchRadiusMeters = searchRadiusStepsMeters[0];
 const photoIndexByRestaurant = new Map();
-let usingDistanceFallback = false;
 let usingRelaxedFallback = false;
 let excludePreviouslySeenResults = false;
 
@@ -57,17 +53,25 @@ function loadGoogleMaps() {
   });
 }
 
-function formatMinutes(durationMillis) {
-  return Math.max(1, Math.round(durationMillis / 60000));
-}
-
 function priceFromGoogle(priceLevel) {
   const prices = { FREE: 0, INEXPENSIVE: 150, MODERATE: 300, EXPENSIVE: 500, VERY_EXPENSIVE: 800 };
   return prices[priceLevel] ?? 300;
 }
 
 const foodKinds = {
-  meal: { label: "正餐", types: ["restaurant", "meal_takeaway", "breakfast_restaurant", "brunch_restaurant", "fast_food_restaurant"] },
+  meal: {
+    label: "正餐",
+    types: [
+      "restaurant", "meal_takeaway", "fast_food_restaurant",
+      "chinese_restaurant", "taiwanese_restaurant", "asian_restaurant",
+      "japanese_restaurant", "korean_restaurant",
+      "breakfast_restaurant", "brunch_restaurant", "noodle_shop",
+      "hot_pot_restaurant", "barbecue_restaurant", "steak_house",
+      "pizza_restaurant", "sushi_restaurant", "ramen_restaurant",
+      "seafood_restaurant", "vegetarian_restaurant", "buffet_restaurant",
+      "hamburger_restaurant", "chicken_restaurant", "sandwich_shop"
+    ]
+  },
   drink: { label: "飲料店", types: ["coffee_shop", "tea_house", "tea_store", "juice_shop"] }
 };
 
@@ -87,8 +91,8 @@ function nearbySearchAreas(position, includeOuterRing) {
   const metersToLongitude = 1 / (111000 * Math.cos(latitude * Math.PI / 180));
   const areas = [{ lat: latitude, lng: longitude, radius: currentSearchRadiusMeters }];
   // 單一 Nearby Search 最多只有 20 筆；中心與東西南北分區同時搜，避免熱門結果遮住附近小店。
-  const offset = includeOuterRing ? 6000 : 2500;
-  const areaRadius = includeOuterRing ? 3000 : 2500;
+  const offset = includeOuterRing ? Math.round(currentSearchRadiusMeters * 0.75) : 2500;
+  const areaRadius = includeOuterRing ? Math.round(currentSearchRadiusMeters * 0.375) : 2500;
   [[offset, 0], [-offset, 0], [0, offset], [0, -offset]].forEach(([northSouth, eastWest]) => {
     areas.push({
       lat: latitude + northSouth * metersToLatitude,
@@ -99,6 +103,21 @@ function nearbySearchAreas(position, includeOuterRing) {
   return areas;
 }
 
+function nextSearchRadiusMeters() {
+  return searchRadiusStepsMeters.find((radius) => radius > currentSearchRadiusMeters) ?? null;
+}
+
+function formatSearchRadius(radius) {
+  return `${radius / 1000} 公里`;
+}
+
+function useSelectedSearchRadius() {
+  const selectedRadius = Number(searchRadiusInput.value);
+  currentSearchRadiusMeters = searchRadiusStepsMeters.includes(selectedRadius)
+    ? selectedRadius
+    : searchRadiusStepsMeters[0];
+}
+
 async function searchNearbyRestaurants(position, rankPreference = "popularity") {
   await loadGoogleMaps();
   const { Place, SearchNearbyRankPreference } = await google.maps.importLibrary("places");
@@ -107,7 +126,7 @@ async function searchNearbyRestaurants(position, rankPreference = "popularity") 
   const request = {
     fields: ["displayName", "formattedAddress", "location", "rating", "userRatingCount", "priceLevel", "primaryType", "types", "googleMapsURI", "currentOpeningHours", "photos", "reviews"],
     includedTypes: foodKind.types,
-    maxResultCount: 10,
+    maxResultCount: 20,
     rankPreference: rankPreference === "distance" ? SearchNearbyRankPreference.DISTANCE : SearchNearbyRankPreference.POPULARITY,
     language: "zh-TW",
     region: "tw"
@@ -132,7 +151,7 @@ async function searchNearbyRestaurants(position, rankPreference = "popularity") 
     placeGroups.push((teaPlaces ?? []).filter((place) => matchesFoodKind(place, foodKind)));
   }
   const places = [];
-  // 交錯取各區結果，讓最終候選不會全由中心區最熱門的店組成。
+  // 交錯取各區最近結果，讓最終候選不會全由中心區店家組成。
   for (let index = 0; index < request.maxResultCount; index += 1) {
     placeGroups.forEach((group) => {
       if (group[index]) places.push(group[index]);
@@ -142,9 +161,9 @@ async function searchNearbyRestaurants(position, rankPreference = "popularity") 
   const eligiblePlaces = excludePreviouslySeenResults
     ? uniquePlaces.filter((place) => !skippedRestaurantNames.has(placeName(place)))
     : uniquePlaces;
-  // places 已依各區的熱門名次交錯排列；保留約 50 間，讓熱門度決定推薦優先順序。
-  const placesToProcess = eligiblePlaces.slice(0, 50);
-  const realRestaurants = await Promise.all(placesToProcess.map(async (place, popularityRank) => {
+  // 保留多區候選店家；最終推薦會依 Google 星等與評論數排序。
+  const placesToProcess = eligiblePlaces.slice(0, 100);
+  const realRestaurants = await Promise.all(placesToProcess.map(async (place) => {
     const isOpen = typeof place.isOpen === "function" ? await place.isOpen() : true;
     const photos = (place.photos ?? []).slice(0, 5).map((photo) => ({
       url: typeof photo.getURI === "function" ? photo.getURI({ maxHeight: 900, maxWidth: 900 }) : null,
@@ -162,7 +181,6 @@ async function searchNearbyRestaurants(position, rankPreference = "popularity") 
       name: placeName(place),
       category: foodKind.label,
       foodType: place.primaryType ?? "restaurant",
-      popularityRank,
       price: priceFromGoogle(place.priceLevel),
       yearsOpen: 0,
       isGooglePlace: true,
@@ -177,8 +195,7 @@ async function searchNearbyRestaurants(position, rankPreference = "popularity") 
       photoAttributions: photos[0]?.attributions ?? [],
       photos,
       reviews,
-      placeAttributions: place.attributions ?? [],
-      travelMinutes: { drive: 0, bike: 0, walk: 0 }
+      placeAttributions: place.attributions ?? []
     };
   }));
   const unseenRestaurants = excludePreviouslySeenResults
@@ -190,62 +207,18 @@ async function searchNearbyRestaurants(position, rankPreference = "popularity") 
   currentBatchIndex = 0;
 }
 
-const routeModes = [
-  ["DRIVING", "drive"],
-  ["TWO_WHEELER", "bike"],
-  ["WALKING", "walk"]
-];
-
-async function updateTravelTimes(position, modes = routeModes) {
-  await loadGoogleMaps();
-  const [{ RouteMatrix }, { UnitSystem }] = await Promise.all([
-    google.maps.importLibrary("routes"),
-    google.maps.importLibrary("core")
-  ]);
-  const origin = { lat: position.coords.latitude, lng: position.coords.longitude };
-  const destinations = restaurants.map((restaurant) => restaurant.location ?? restaurant.address);
-  for (const [travelMode, property] of modes) {
-    const { matrix } = await RouteMatrix.computeRouteMatrix({
-      origins: [origin],
-      destinations,
-      travelMode,
-      units: UnitSystem.METRIC,
-      language: "zh-TW",
-      region: "tw",
-      fields: ["durationMillis", "distanceMeters", "condition"]
-    });
-
-    matrix.rows[0].items.forEach((item, index) => {
-      if (item.condition === "ROUTE_EXISTS" && item.durationMillis) {
-        restaurants[index].travelMinutes[property] = formatMinutes(item.durationMillis);
-      }
-    });
-  }
-}
-
 function getFilters() {
   const data = new FormData(form);
   return {
     foodKind: data.get("foodKind"),
     budget: Number(data.get("budget")),
-    travelTime: Number(data.get("travelTime")),
-    travelMode: data.get("travelMode"),
+    searchRadius: Number(data.get("searchRadius")),
     openNow: data.get("openNow") === "on"
   };
 }
 
 function matchesBudget(price, budget) {
   return price <= budget;
-}
-
-function fastestTravelMinutes(restaurant) {
-  const times = Object.values(restaurant.travelMinutes).filter((minutes) => Number.isFinite(minutes) && minutes > 0);
-  return times.length ? Math.min(...times) : 99;
-}
-
-function travelTimeSummary(restaurant) {
-  const format = (minutes) => (Number.isFinite(minutes) && minutes > 0 ? `${minutes} 分` : "—");
-  return `🚗 ${format(restaurant.travelMinutes.drive)} · 🛵 ${format(restaurant.travelMinutes.bike)} · 🚶 ${format(restaurant.travelMinutes.walk)}`;
 }
 
 function ratingSummary(restaurant) {
@@ -287,7 +260,6 @@ function renderReviewTicker(restaurant) {
 
 function scoreRestaurant(restaurant, filters) {
   let score = 0;
-  score += Math.max(0, 40 - restaurant.travelMinutes[filters.travelMode] * 2);
   score += restaurant.rating * 3;
   if (restaurant.isOpen) score += 25;
   if (matchesBudget(restaurant.price, filters.budget)) score += 10;
@@ -298,20 +270,11 @@ function filterAndRank() {
   const filters = getFilters();
   const rankedRestaurants = restaurants
     .filter((restaurant) => usingRelaxedFallback || matchesBudget(restaurant.price, filters.budget))
-    // 交通工具與到店時間是使用者主動設定的條件，任何備援搜尋都不能略過。
-    .filter((restaurant) => {
-      const minutes = restaurant.travelMinutes[filters.travelMode];
-      return Number.isFinite(minutes) && minutes > 0 && minutes <= filters.travelTime;
-    })
     .filter((restaurant) => usingRelaxedFallback || !filters.openNow || restaurant.isOpen)
     .map((restaurant) => ({ ...restaurant, score: scoreRestaurant(restaurant, filters) }));
 
-  return rankedRestaurants.sort((a, b) => {
-    if (usingDistanceFallback) {
-      return a.travelMinutes[filters.travelMode] - b.travelMinutes[filters.travelMode] || b.score - a.score;
-    }
-    return a.popularityRank - b.popularityRank || b.score - a.score;
-  });
+  return rankedRestaurants.sort((a, b) => b.rating - a.rating
+      || (b.ratingCount ?? 0) - (a.ratingCount ?? 0));
 }
 
 function availableCandidates() {
@@ -329,7 +292,7 @@ function renderTopPick(restaurant) {
       <span class="top-pick-emoji">${restaurant.emoji}</span>
       <div>
         <h3>${restaurant.name}</h3>
-        <p>${ratingSummary(restaurant)} · 約 ${restaurant.price} 元／人 · ${travelTimeSummary(restaurant)}</p>
+        <p>${ratingSummary(restaurant)} · 約 ${restaurant.price} 元／人 · ${restaurant.address}</p>
         <a class="map-link" href="${restaurant.googleMapsURI ?? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${restaurant.name} ${restaurant.address}`)}`}" target="_blank" rel="noreferrer">在 Google Maps 開啟 ↗</a>
       </div>
     </div>`;
@@ -375,7 +338,7 @@ function renderComparison() {
       ${similarRestaurants.length ? similarRestaurants.map((restaurant) => `
         <article class="comparison-card">
           ${restaurantImage(restaurant, "comparison-image")}
-          <div><strong>${restaurant.name}</strong><p>${ratingSummary(restaurant)} · ${restaurant.price} 元 · ${travelTimeSummary(restaurant)}</p></div>
+          <div><strong>${restaurant.name}</strong><p>${ratingSummary(restaurant)} · ${restaurant.price} 元 · ${restaurant.address}</p></div>
         </article>`).join("") : '<p class="empty-state">目前資料中還沒有其他同類餐廳。</p>'}
     </div>`;
 }
@@ -408,6 +371,8 @@ function renderResults() {
   resultCount.textContent = `${remaining.length}／${currentBatch.length} 間待挑選`;
 
   if (!ranked.length) {
+    const nextRadius = nextSearchRadiusMeters();
+    const canExpandSearch = currentPosition && nextRadius;
     topPick.hidden = true;
     swipeDeck.replaceChildren();
     swipeActions.hidden = true;
@@ -415,7 +380,9 @@ function renderResults() {
     mapPanel.replaceChildren();
     renderComparison();
     resultsTitle.textContent = "找不到符合的餐廳";
-    swipeDeck.innerHTML = '<p class="empty-state">試著放寬到店時間、預算或「只顯示營業中」的條件吧。</p>';
+    swipeDeck.innerHTML = canExpandSearch
+      ? `<div class="next-batch-state"><span aria-hidden="true">↻</span><h3>${formatSearchRadius(currentSearchRadiusMeters)}內沒有符合條件的店</h3><p>可擴大到 ${formatSearchRadius(nextRadius)}，繼續找沒看過的店。</p><button class="next-batch-button" type="button" data-action="expand-search">擴大範圍找新餐廳</button></div>`
+      : '<p class="empty-state">試著放寬到店時間、預算或「只顯示營業中」的條件吧。</p>';
     return;
   }
 
@@ -433,13 +400,14 @@ function renderResults() {
 
   if (!remaining.length) {
     const hasNextBatch = candidates.length > batchStart + batchSize;
-    const canExpandSearch = currentPosition && currentSearchRadiusMeters < expandedSearchRadiusMeters;
+    const nextRadius = nextSearchRadiusMeters();
+    const canExpandSearch = currentPosition && nextRadius;
     topPick.hidden = true;
     swipeDeck.innerHTML = `
       <div class="next-batch-state">
         <span aria-hidden="true">↻</span>
-        <h3>${hasNextBatch ? "這一輪看完了" : canExpandSearch ? "5 公里內都看完了" : "附近沒有新的餐廳了"}</h3>
-        <p>${hasNextBatch ? "下一批不會出現剛看過的餐廳。" : canExpandSearch ? "擴大到 8 公里，繼續找沒看過的店。" : "調整設定或移動位置後，再搜尋新的店家。"}</p>
+        <h3>${hasNextBatch ? "這一輪看完了" : canExpandSearch ? `${formatSearchRadius(currentSearchRadiusMeters)}內都看完了` : "附近沒有新的餐廳了"}</h3>
+        <p>${hasNextBatch ? "下一批不會出現剛看過的餐廳。" : canExpandSearch ? `擴大到 ${formatSearchRadius(nextRadius)}，繼續找沒看過的店。` : "調整設定或移動位置後，再搜尋新的店家。"}</p>
         ${hasNextBatch ? '<button class="next-batch-button" type="button" data-action="next-batch">下一批推薦</button>' : canExpandSearch ? '<button class="next-batch-button" type="button" data-action="expand-search">擴大範圍找新餐廳</button>' : ""}
       </div>`;
     swipeActions.hidden = true;
@@ -467,7 +435,7 @@ function renderResults() {
       <div class="restaurant-visual">${visual}<span class="status ${restaurant.isOpen ? "open" : "closed"}">${restaurant.isOpen ? "營業中" : "休息中"}</span></div>
       <div class="swipe-card-body"><p class="section-kicker">下一間候選</p><h3>${restaurant.name}</h3>
       <p class="swipe-meta">${restaurant.category} · 約 ${restaurant.price} 元／人 · ${ratingSummary(restaurant)}</p>
-      <p class="swipe-reason">${travelTimeSummary(restaurant)}，符合你的設定。</p>${renderReviewTicker(restaurant)}</div>
+      <p class="swipe-reason">${restaurant.address}</p>${renderReviewTicker(restaurant)}</div>
       <div class="swipe-labels"><span class="swipe-nope">略過</span><span class="swipe-like">選這間</span></div>
     </article>`;
   swipeActions.hidden = false;
@@ -500,11 +468,14 @@ function startNextBatch() {
 }
 
 async function expandSearchRadius() {
-  if (!currentPosition || currentSearchRadiusMeters >= expandedSearchRadiusMeters) return;
-  currentSearchRadiusMeters = expandedSearchRadiusMeters;
+  const nextRadius = nextSearchRadiusMeters();
+  if (!currentPosition || !nextRadius) return false;
+  currentSearchRadiusMeters = nextRadius;
+  searchRadiusInput.value = String(nextRadius);
   currentBatchIndex = 0;
   excludePreviouslySeenResults = true;
   await refreshNearbyResults();
+  return true;
 }
 
 function setupSwipeGesture(card, restaurantName) {
@@ -540,10 +511,7 @@ function setupSwipeGesture(card, restaurantName) {
 }
 
 function syncRangeLabels() {
-  const modeLabels = { drive: "開車 🚗", bike: "騎車 🛵", walk: "走路 🚶" };
-  travelTimeValue.textContent = `${travelTimeInput.value} 分鐘內`;
   budgetValue.textContent = `${Number(budgetInput.value).toLocaleString("zh-TW")} 元以下`;
-  travelModeHint.textContent = `以${modeLabels[travelModeInput.value]}時間計算`;
 }
 
 function setSettingsOpen(isOpen) {
@@ -552,16 +520,17 @@ function setSettingsOpen(isOpen) {
   settingsButton.setAttribute("aria-expanded", String(isOpen));
 }
 
-form.addEventListener("submit", (event) => {
+form.addEventListener("submit", async (event) => {
   event.preventDefault();
   selectedRestaurantName = null;
   skippedRestaurantNames = new Set();
   starredRestaurantNames = new Set();
   currentBatchIndex = 0;
-  currentSearchRadiusMeters = 5000;
+  useSelectedSearchRadius();
   excludePreviouslySeenResults = false;
   setSettingsOpen(false);
-  renderResults();
+  if (currentPosition) await refreshNearbyResults();
+  else renderResults();
 });
 
 form.addEventListener("change", async (event) => {
@@ -569,9 +538,9 @@ form.addEventListener("change", async (event) => {
   skippedRestaurantNames = new Set();
   currentBatchIndex = 0;
   excludePreviouslySeenResults = false;
-  // 種類、交通工具與到店時間改變後重新搜尋，必要時可改用最近餐廳備援。
-  if (currentPosition && ["foodKind", "travelMode", "travelTime"].includes(event.target.name)) {
-    currentSearchRadiusMeters = 5000;
+  // 搜尋類型或起始範圍改變後，重新取得對應範圍的候選店。
+  if (currentPosition && ["foodKind", "searchRadius"].includes(event.target.name)) {
+    useSelectedSearchRadius();
     await refreshNearbyResults();
     return;
   }
@@ -600,7 +569,7 @@ swipeDeck.addEventListener("click", (event) => {
     }
     return;
   }
-  if (event.target.closest('[data-action="next-batch"]')) startNextBatch();
+  if (event.target.closest('[data-action="next-batch"]')) void startNextBatch();
   if (event.target.closest('[data-action="expand-search"]')) expandSearchRadius();
 });
 starButton.addEventListener("click", () => {
@@ -632,16 +601,14 @@ resetButton.addEventListener("click", () => {
   skippedRestaurantNames = new Set();
   starredRestaurantNames = new Set();
   currentBatchIndex = 0;
-  currentSearchRadiusMeters = 5000;
+  useSelectedSearchRadius();
   excludePreviouslySeenResults = false;
   syncRangeLabels();
   renderResults();
 });
 settingsButton.addEventListener("click", () => setSettingsOpen(form.hidden));
 settingsBackdrop.addEventListener("click", () => setSettingsOpen(false));
-travelTimeInput.addEventListener("input", syncRangeLabels);
 budgetInput.addEventListener("input", syncRangeLabels);
-travelModeInput.addEventListener("change", syncRangeLabels);
 
 async function refreshNearbyResults() {
   if (!currentPosition) return;
@@ -649,32 +616,13 @@ async function refreshNearbyResults() {
   locationButton.disabled = true;
   setTravelStatus("正在依目前條件搜尋附近餐廳…");
   try {
-    usingDistanceFallback = false;
     usingRelaxedFallback = false;
-    await searchNearbyRestaurants(currentPosition, "popularity");
-    const selectedMode = getFilters().travelMode;
-    const selectedRouteMode = routeModes.find(([, property]) => property === selectedMode);
-    await updateTravelTimes(currentPosition, [selectedRouteMode]);
-
-    if (!availableCandidates().length) {
-      usingDistanceFallback = true;
-      await searchNearbyRestaurants(currentPosition, "distance");
-      await updateTravelTimes(currentPosition, [selectedRouteMode]);
-    }
-
+    // 先用距離取得附近候選，再以星等與評論數決定推薦順序。
+    await searchNearbyRestaurants(currentPosition, "distance");
     if (!availableCandidates().length) usingRelaxedFallback = true;
 
-    const displayCandidates = availableCandidates().slice(0, 20);
-    if (displayCandidates.length) {
-      const restaurantsByName = new Map(restaurants.map((restaurant) => [restaurant.name, restaurant]));
-      restaurants.splice(0, restaurants.length, ...displayCandidates.map((restaurant) => restaurantsByName.get(restaurant.name)).filter(Boolean));
-      // 只替會出現在卡片上的餐廳補算另外兩種交通方式。
-      await updateTravelTimes(currentPosition, routeModes.filter(([, property]) => property !== selectedMode));
-    }
-
-    const distanceNote = usingDistanceFallback ? "熱門店沒有符合結果，已改以距離顯示最近餐廳。" : "";
     const relaxedNote = usingRelaxedFallback ? "目前沒有符合設定的店，已放寬預算與營業狀態。" : "";
-    setTravelStatus(`已找到附近真實餐廳並更新交通時間。${distanceNote}${relaxedNote} 步行與兩輪路線可能有資料不完整的情況。Powered by Google ©2026`);
+    setTravelStatus(`已找到附近真實餐廳。${relaxedNote} Powered by Google ©2026`);
     renderResults();
   } catch (error) {
     setTravelStatus(error.message, true);
@@ -690,11 +638,11 @@ function findNearbyFromCurrentLocation() {
   }
 
   locationButton.disabled = true;
-  setTravelStatus("正在取得你的位置並更新交通時間…");
+  setTravelStatus("正在取得你的位置並搜尋附近餐廳…");
   navigator.geolocation.getCurrentPosition(
     async (position) => {
       currentPosition = position;
-      currentSearchRadiusMeters = 5000;
+      useSelectedSearchRadius();
       selectedRestaurantName = null;
       skippedRestaurantNames = new Set();
       starredRestaurantNames = new Set();
@@ -702,7 +650,7 @@ function findNearbyFromCurrentLocation() {
       await refreshNearbyResults();
     },
     () => {
-      setTravelStatus("沒有取得定位權限，因此保留示範時間。", true);
+      setTravelStatus("沒有取得定位權限，無法搜尋附近餐廳。", true);
       locationButton.disabled = false;
     },
     { enableHighAccuracy: false, timeout: 10000, maximumAge: 300000 }

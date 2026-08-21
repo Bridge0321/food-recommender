@@ -47,19 +47,17 @@
           </label>
 
           <label class="field">
-            <span>到店時間</span>
-            <output id="travel-time-value" class="range-value" for="travel-time">60 分鐘內</output>
-            <input id="travel-time" name="travelTime" type="range" min="10" max="60" step="5" value="60" />
-            <small id="travel-mode-hint">以開車時間計算</small>
-          </label>
-
-          <label class="field">
-            <span>到店交通工具</span>
-            <select id="travel-mode" name="travelMode">
-              <option value="drive">開車 🚗</option>
-              <option value="bike">騎車 🛵</option>
-              <option value="walk">走路 🚶</option>
+            <span>搜尋範圍</span>
+            <select id="search-radius" name="searchRadius">
+              <option value="5000" selected>5 公里內</option>
+              <option value="8000">8 公里內</option>
+              <option value="12000">12 公里內</option>
+              <option value="18000">18 公里內</option>
+              <option value="27000">27 公里內</option>
+              <option value="40000">40 公里內</option>
+              <option value="50000">50 公里內</option>
             </select>
+            <small>沒有結果時，可選擇擴大到下一個範圍</small>
           </label>
 
           <label class="field">
